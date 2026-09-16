@@ -7,6 +7,7 @@ import { Navbar } from "@/components/layout/navbar";
 import { Footer } from "@/components/layout/footer";
 import { ScrollProgress } from "@/components/layout/scroll-progress";
 import { site } from "@/lib/site";
+import ChatWidget from "@/components/chat/ChatWidget";
 
 export const metadata: Metadata = {
   title: { default: `${site.name} — Where Technology Meets Possibility`, template: `%s — ${site.name}` },
@@ -36,6 +37,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <main id="main">{children}</main>
           <Footer />
         </Providers>
+        <ChatWidget />
       </body>
     </html>
   );
