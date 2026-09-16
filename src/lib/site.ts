@@ -5,18 +5,6 @@ export const site = {
   tagline: "Digital Systems for a Brighter Tomorrow.",
   description:
     "We build digital systems, AI automation and business solutions for a brighter tomorrow.",
-  /**
-   * LOGOS — replace these two files with your own (keep the names, or update the paths here).
-   * `onLight` is shown in the light theme (dark-coloured logo).
-   * `onDark`  is shown in the dark theme (white/light-coloured logo).
-   * PNG, SVG or WebP all work.
-   */
-  logo: {
-    onLight: "/logo/logo-light-theme.svg",
-    onDark: "/logo/logo-dark-theme.svg",
-    width: 172,
-    height: 36,
-  },
   contact: {
     address: "Ahmedabad, Gujarat, India",
     email: "hello@aarambhinfinity.com",

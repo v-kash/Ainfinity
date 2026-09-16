@@ -72,7 +72,7 @@ export function Navbar() {
           )}
         >
           <div className="mx-auto flex h-[76px] w-full max-w-[1320px] items-center justify-between gap-6 px-5 sm:px-8">
-            <Logo onClick={() => setOpen(false)} />
+            <Logo animated onClick={() => setOpen(false)} />
 
             <nav aria-label="Main" className="hidden lg:block" onMouseLeave={() => setHovered(null)}>
               <ul className="flex items-center">
