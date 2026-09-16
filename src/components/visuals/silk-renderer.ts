@@ -1,6 +1,11 @@
 /**
- * Silk ribbon renderer. Framework-free so it can run inside a Web Worker
- * (on an OffscreenCanvas) or, as a fallback, on the main thread.
+ * Silk ribbon renderer, drawn with raw WebGL (no library). Framework-free.
+ *
+ * Each ribbon is a bundle of thin lines. The geometry is a static grid of
+ * (line, position along the curve, side) triples uploaded once; the vertex
+ * shader bends it along the ribbon's bezier, twists and ripples it, and
+ * extrudes it into a thin anti-aliased strip. Per frame the CPU only updates
+ * a few uniforms and issues one draw call per ribbon.
  */
 
 export type Pt = [number, number];
@@ -33,157 +38,258 @@ export const PRESETS: Record<SilkPreset, Ribbon[]> = {
   ],
 };
 
-/** Curve samples per ribbon. Points are joined with quadratic curves, so this stays smooth. */
-const STEPS = 48;
+/** Samples per line. They're evaluated on the GPU, so this can be generous. */
+const STEPS = 64;
 const STILL_TIME = 14;
+const FRAME_MS = 1000 / 60;
 
-type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+const VERTEX = `
+precision highp float;
+// x: line index, y: position along the curve (0–1), z: side of the strip (-1 or 1)
+attribute vec3 aPos;
+uniform vec2 uRes;
+uniform vec2 uP0;
+uniform vec2 uP1;
+uniform vec2 uP2;
+uniform vec2 uP3;
+uniform float uWidth;
+uniform float uTwist;
+uniform float uSpeed;
+uniform float uPhase;
+uniform float uLines;
+uniform float uTime;
+uniform float uHalf;
+varying float vT;
+varying float vSide;
 
-export type SilkRenderer = ReturnType<typeof createSilkRenderer>;
+const float PI = 3.14159265;
 
-export function createSilkRenderer(canvas: HTMLCanvasElement | OffscreenCanvas, ribbons: Ribbon[]) {
-  const ctx = canvas.getContext("2d", { alpha: true }) as Ctx | null;
-  if (!ctx) return null;
+vec2 linePoint(float u, float k) {
+  float m = 1.0 - u;
+  vec2 b = m * m * m * uP0 + 3.0 * m * m * u * uP1 + 3.0 * m * u * u * uP2 + u * u * u * uP3;
+  vec2 d = 3.0 * m * m * (uP1 - uP0) + 6.0 * m * u * (uP2 - uP1) + 3.0 * u * u * (uP3 - uP2);
+  vec2 n = vec2(-d.y, d.x) / max(length(d), 1e-4);
+  float envelope = pow(max(sin(u * PI), 1e-6), 0.6);
+  float twist = 0.1 + 0.9 * sin(u * PI * uTwist + uTime * uSpeed + uPhase);
+  return b + n * envelope * (k * uWidth * twist + 5.0 * sin(u * 9.0 - uTime * 0.8 + k * 4.0));
+}
 
-  const raf: (cb: (t: number) => void) => number =
-    typeof requestAnimationFrame === "function"
-      ? (cb) => requestAnimationFrame(cb)
-      : (cb) => setTimeout(() => cb(performance.now()), 16) as unknown as number;
-  const caf: (id: number) => void =
-    typeof cancelAnimationFrame === "function" ? (id) => cancelAnimationFrame(id) : (id) => clearTimeout(id);
+void main() {
+  float k = aPos.x / (uLines - 1.0) - 0.5;
+  vec2 p = linePoint(aPos.y, k);
+  // Extrude across the line's own direction so steep, fanned-out lines keep their width
+  vec2 t = linePoint(aPos.y + 0.004, k) - linePoint(aPos.y - 0.004, k);
+  vec2 pos = p + vec2(-t.y, t.x) / max(length(t), 1e-4) * aPos.z * uHalf;
 
-  // Per-step buffers, reused every frame (no allocations while animating)
-  const bx = new Float32Array(STEPS + 1);
-  const by = new Float32Array(STEPS + 1);
-  const nx = new Float32Array(STEPS + 1);
-  const ny = new Float32Array(STEPS + 1);
-  const env = new Float32Array(STEPS + 1);
-  const tw = new Float32Array(STEPS + 1);
-  const sinA = new Float32Array(STEPS + 1);
-  const cosA = new Float32Array(STEPS + 1);
+  vec2 axis = uP3 - uP0;
+  vT = dot(pos - uP0, axis) / dot(axis, axis);
+  vSide = aPos.z;
+  vec2 clip = pos / uRes * 2.0 - 1.0;
+  gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
+}
+`;
 
-  // Per-line constants: sin/cos of the line's phase offset, so the ripple
-  // sin(a + b) becomes a cheap product instead of a trig call per point.
-  const lineK = ribbons.map((r) => Float32Array.from({ length: r.lines }, (_, i) => i / (r.lines - 1) - 0.5));
-  const lineSin = lineK.map((ks) => ks.map((k) => Math.sin(k * 4)));
-  const lineCos = lineK.map((ks) => ks.map((k) => Math.cos(k * 4)));
-  const envPow = new Float32Array(STEPS + 1);
-  for (let s = 0; s <= STEPS; s++) envPow[s] = Math.pow(Math.sin((s / STEPS) * Math.PI), 0.6);
+const FRAGMENT = `
+precision mediump float;
+uniform vec3 uEdge;
+uniform vec3 uMid;
+uniform vec3 uTail;
+uniform float uAlpha;
+uniform float uLineWidth;
+uniform float uHalfPx;
+varying float vT;
+varying float vSide;
+
+void main() {
+  float t = clamp(vT, 0.0, 1.0);
+  // Transparent at both ends of the ribbon, like a canvas gradient with 0.28 / 0.82 stops
+  float fade = min(t / 0.28, 1.0) * min((1.0 - t) / 0.18, 1.0);
+  // Analytic anti-aliasing: coverage of a line uLineWidth device pixels wide
+  float coverage = clamp(uLineWidth * 0.5 + 0.5 - abs(vSide) * uHalfPx, 0.0, 1.0);
+  vec3 color = t < 0.55 ? mix(uEdge, uMid, max(t - 0.28, 0.0) / 0.27)
+    : t < 0.82 ? mix(uMid, uTail, (t - 0.55) / 0.27)
+    : mix(uTail, uEdge, (t - 0.82) / 0.18);
+  float a = uAlpha * fade * coverage;
+  gl_FragColor = vec4(color * a, a);
+}
+`;
+
+const UNIFORMS = [
+  "uRes", "uP0", "uP1", "uP2", "uP3", "uWidth", "uTwist", "uSpeed", "uPhase", "uLines", "uTime", "uHalf",
+  "uEdge", "uMid", "uTail", "uAlpha", "uLineWidth", "uHalfPx",
+] as const;
+
+type Uniforms = Record<(typeof UNIFORMS)[number], WebGLUniformLocation | null>;
+
+export type SilkRenderer = NonNullable<ReturnType<typeof createSilkRenderer>>;
+
+export function createSilkRenderer(canvas: HTMLCanvasElement, ribbons: Ribbon[]) {
+  const gl = canvas.getContext("webgl", {
+    alpha: true,
+    premultipliedAlpha: true,
+    antialias: false,
+    depth: false,
+    stencil: false,
+    // Stay on the integrated GPU on dual-GPU laptops
+    powerPreference: "low-power",
+  });
+  if (!gl) return null;
+
+  const maxLines = Math.max(...ribbons.map((r) => r.lines));
+  let program: WebGLProgram | null = null;
+  let buffers: WebGLBuffer[] = [];
+  let u = {} as Uniforms;
+
+  function compile(type: number, source: string) {
+    const shader = gl!.createShader(type)!;
+    gl!.shaderSource(shader, source);
+    gl!.compileShader(shader);
+    return shader;
+  }
+
+  /** Creates GPU resources. Runs again after a lost context is restored. */
+  function setup() {
+    const vs = compile(gl!.VERTEX_SHADER, VERTEX);
+    const fs = compile(gl!.FRAGMENT_SHADER, FRAGMENT);
+    const p = gl!.createProgram()!;
+    gl!.attachShader(p, vs);
+    gl!.attachShader(p, fs);
+    gl!.linkProgram(p);
+    gl!.deleteShader(vs);
+    gl!.deleteShader(fs);
+    if (!gl!.getProgramParameter(p, gl!.LINK_STATUS)) {
+      gl!.deleteProgram(p);
+      return false;
+    }
+    program = p;
+    gl!.useProgram(p);
+    u = Object.fromEntries(UNIFORMS.map((name) => [name, gl!.getUniformLocation(p, name)])) as Uniforms;
+
+    // Every line is a strip of quads; lines are laid out in order, so a ribbon
+    // with n lines draws the first n lines' worth of indices.
+    const verts = new Float32Array(maxLines * (STEPS + 1) * 6);
+    const indices = new Uint16Array(maxLines * STEPS * 6);
+    let v = 0;
+    let n = 0;
+    for (let i = 0; i < maxLines; i++) {
+      for (let s = 0; s <= STEPS; s++) {
+        verts.set([i, s / STEPS, -1, i, s / STEPS, 1], v);
+        v += 6;
+        if (s < STEPS) {
+          const a = (i * (STEPS + 1) + s) * 2;
+          indices.set([a, a + 1, a + 2, a + 1, a + 3, a + 2], n);
+          n += 6;
+        }
+      }
+    }
+    const vbo = gl!.createBuffer()!;
+    gl!.bindBuffer(gl!.ARRAY_BUFFER, vbo);
+    gl!.bufferData(gl!.ARRAY_BUFFER, verts, gl!.STATIC_DRAW);
+    const ibo = gl!.createBuffer()!;
+    gl!.bindBuffer(gl!.ELEMENT_ARRAY_BUFFER, ibo);
+    gl!.bufferData(gl!.ELEMENT_ARRAY_BUFFER, indices, gl!.STATIC_DRAW);
+    buffers = [vbo, ibo];
+
+    const loc = gl!.getAttribLocation(p, "aPos");
+    gl!.enableVertexAttribArray(loc);
+    gl!.vertexAttribPointer(loc, 3, gl!.FLOAT, false, 0, 0);
+    gl!.enable(gl!.BLEND);
+    gl!.clearColor(0, 0, 0, 0);
+    gl!.viewport(0, 0, gl!.drawingBufferWidth, gl!.drawingBufferHeight);
+    return true;
+  }
+
+  if (!setup()) return null;
 
   let w = 0;
   let h = 0;
+  let dpr = 1;
   let dark = false;
   let reduce = false;
   let running = false;
   let visible = true;
   let frame = 0;
   let lastFrame = 0;
-  let frameInterval = 1000 / 60;
-  let slowStreak = 0;
   let lastTime = STILL_TIME;
   const mouse = { x: 0.5, y: 0.5, tx: 0.5, ty: 0.5 };
 
   function draw(time: number) {
     lastTime = time;
-    ctx!.clearRect(0, 0, w, h);
-    if (!w || !h) return;
-    ctx!.globalCompositeOperation = dark ? "lighter" : "source-over";
-    ctx!.lineWidth = dark ? 1 : 1.2;
-
+    if (!program || !w || !h || gl!.isContextLost()) return;
     mouse.x += (mouse.tx - mouse.x) * 0.05;
     mouse.y += (mouse.ty - mouse.y) * 0.05;
 
+    gl!.clear(gl!.COLOR_BUFFER_BIT);
+    // Additive "lighter" glow on dark backgrounds, normal source-over on light ones
+    gl!.blendFunc(gl!.ONE, dark ? gl!.ONE : gl!.ONE_MINUS_SRC_ALPHA);
+
+    const lineWidth = (dark ? 1 : 1.2) * dpr;
+    const halfPx = lineWidth / 2 + 1;
+    gl!.uniform2f(u.uRes, w, h);
+    gl!.uniform1f(u.uTime, time);
+    gl!.uniform1f(u.uLineWidth, lineWidth);
+    gl!.uniform1f(u.uHalfPx, halfPx);
+    gl!.uniform1f(u.uHalf, halfPx / dpr);
+    gl!.uniform1f(u.uAlpha, (dark ? 0.3 : 0.24) * (w < 768 ? 0.55 : 1));
+    gl!.uniform3f(u.uEdge, 1, 90 / 255, 31 / 255);
+    if (dark) gl!.uniform3f(u.uMid, 1, 178 / 255, 130 / 255);
+    else gl!.uniform3f(u.uMid, 1, 112 / 255, 46 / 255);
+    gl!.uniform3f(u.uTail, 1, 80 / 255, 20 / 255);
+
     const S = Math.min(w, h);
-    const alpha = (dark ? 0.3 : 0.24) * (w < 768 ? 0.55 : 1);
-
-    for (let s = 0; s <= STEPS; s++) {
-      const a = (s / STEPS) * 9 - time * 0.8;
-      sinA[s] = Math.sin(a);
-      cosA[s] = Math.cos(a);
-    }
-
-    for (let ri = 0; ri < ribbons.length; ri++) {
-      const r = ribbons[ri];
+    for (const r of ribbons) {
       const mx = (mouse.x - 0.5) * 40 * r.depth;
       const my = (mouse.y - 0.5) * 40 * r.depth;
-      const x0 = r.pts[0][0] * w + mx, y0 = r.pts[0][1] * h + my;
-      const x1 = r.pts[1][0] * w + mx, y1 = r.pts[1][1] * h + my;
-      const x2 = r.pts[2][0] * w + mx, y2 = r.pts[2][1] * h + my;
-      const x3 = r.pts[3][0] * w + mx, y3 = r.pts[3][1] * h + my;
-      const W = r.width * S;
-
-      for (let s = 0; s <= STEPS; s++) {
-        const u = s / STEPS;
-        const m = 1 - u;
-        const b0 = m * m * m, b1 = 3 * m * m * u, b2 = 3 * m * u * u, b3 = u * u * u;
-        bx[s] = b0 * x0 + b1 * x1 + b2 * x2 + b3 * x3;
-        by[s] = b0 * y0 + b1 * y1 + b2 * y2 + b3 * y3;
-        const dx = 3 * m * m * (x1 - x0) + 6 * m * u * (x2 - x1) + 3 * u * u * (x3 - x2);
-        const dy = 3 * m * m * (y1 - y0) + 6 * m * u * (y2 - y1) + 3 * u * u * (y3 - y2);
-        const len = Math.hypot(dx, dy) || 1;
-        nx[s] = -dy / len;
-        ny[s] = dx / len;
-        env[s] = envPow[s];
-        tw[s] = 0.1 + 0.9 * Math.sin(u * Math.PI * r.twist + time * r.speed + r.phase);
-      }
-
-      const g = ctx!.createLinearGradient(x0, y0, x3, y3);
-      g.addColorStop(0, "rgba(255,90,31,0)");
-      g.addColorStop(0.28, `rgba(255,90,31,${alpha})`);
-      g.addColorStop(0.55, dark ? `rgba(255,178,130,${alpha})` : `rgba(255,112,46,${alpha})`);
-      g.addColorStop(0.82, `rgba(255,80,20,${alpha})`);
-      g.addColorStop(1, "rgba(255,90,31,0)");
-      ctx!.strokeStyle = g;
-
-      const ks = lineK[ri], ls = lineSin[ri], lc = lineCos[ri];
-      for (let i = 0; i < r.lines; i++) {
-        const kW = ks[i] * W;
-        const sB = ls[i], cB = lc[i];
-        ctx!.beginPath();
-        let px = 0, py = 0;
-        for (let s = 0; s <= STEPS; s++) {
-          const off = env[s] * (kW * tw[s] + 5 * (sinA[s] * cB + cosA[s] * sB));
-          const x = bx[s] + nx[s] * off;
-          const y = by[s] + ny[s] * off;
-          if (s === 0) ctx!.moveTo(x, y);
-          else ctx!.quadraticCurveTo(px, py, (px + x) / 2, (py + y) / 2);
-          px = x;
-          py = y;
-        }
-        ctx!.lineTo(px, py);
-        ctx!.stroke();
-      }
+      gl!.uniform2f(u.uP0, r.pts[0][0] * w + mx, r.pts[0][1] * h + my);
+      gl!.uniform2f(u.uP1, r.pts[1][0] * w + mx, r.pts[1][1] * h + my);
+      gl!.uniform2f(u.uP2, r.pts[2][0] * w + mx, r.pts[2][1] * h + my);
+      gl!.uniform2f(u.uP3, r.pts[3][0] * w + mx, r.pts[3][1] * h + my);
+      gl!.uniform1f(u.uWidth, r.width * S);
+      gl!.uniform1f(u.uTwist, r.twist);
+      gl!.uniform1f(u.uSpeed, r.speed);
+      gl!.uniform1f(u.uPhase, r.phase);
+      gl!.uniform1f(u.uLines, r.lines);
+      gl!.drawElements(gl!.TRIANGLES, r.lines * STEPS * 6, gl!.UNSIGNED_SHORT, 0);
     }
   }
 
   function loop(now: number) {
-    frame = raf(loop);
-    if (now - lastFrame < frameInterval - 2) return;
+    frame = requestAnimationFrame(loop);
+    // Cap at 60fps so 120Hz screens don't double the work
+    if (now - lastFrame < FRAME_MS - 2) return;
     lastFrame = now;
-    const t0 = performance.now();
     draw(now / 1000);
-    // Adaptive quality: on slower devices drop to 30fps instead of stuttering.
-    if (performance.now() - t0 > 10) {
-      if (++slowStreak > 20) frameInterval = 1000 / 30;
-    } else if (slowStreak > 0) {
-      slowStreak--;
-    }
   }
 
   function sync() {
-    caf(frame);
+    cancelAnimationFrame(frame);
     if (reduce) draw(STILL_TIME);
-    else if (running && visible) frame = raf(loop);
+    else if (running && visible) frame = requestAnimationFrame(loop);
   }
 
+  function onLost(e: Event) {
+    e.preventDefault();
+    cancelAnimationFrame(frame);
+    program = null;
+  }
+
+  function onRestored() {
+    if (setup()) sync();
+  }
+
+  canvas.addEventListener("webglcontextlost", onLost);
+  canvas.addEventListener("webglcontextrestored", onRestored);
+
   return {
-    resize(width: number, height: number, dpr: number) {
+    resize(width: number, height: number, ratio: number) {
       w = width;
       h = height;
+      dpr = ratio;
       canvas.width = Math.max(1, Math.round(w * dpr));
       canvas.height = Math.max(1, Math.round(h * dpr));
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      if (reduce || !visible) draw(lastTime);
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      // Resizing clears the canvas; redraw now rather than flashing blank for a frame
+      draw(lastTime);
     },
     setMouse(x: number, y: number) {
       mouse.tx = x;
@@ -191,7 +297,7 @@ export function createSilkRenderer(canvas: HTMLCanvasElement | OffscreenCanvas, 
     },
     setDark(value: boolean) {
       dark = value;
-      if (reduce || !visible) draw(lastTime);
+      draw(lastTime);
     },
     setVisible(value: boolean) {
       visible = value;
@@ -204,7 +310,13 @@ export function createSilkRenderer(canvas: HTMLCanvasElement | OffscreenCanvas, 
     },
     destroy() {
       running = false;
-      caf(frame);
+      cancelAnimationFrame(frame);
+      canvas.removeEventListener("webglcontextlost", onLost);
+      canvas.removeEventListener("webglcontextrestored", onRestored);
+      if (program) gl.deleteProgram(program);
+      buffers.forEach((b) => gl.deleteBuffer(b));
+      // Free the context now instead of waiting for GC (browsers cap live contexts)
+      gl.getExtension("WEBGL_lose_context")?.loseContext();
     },
   };
 }
