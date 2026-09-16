@@ -3,7 +3,7 @@
 import { useLenis } from "lenis/react";
 import { motion } from "motion/react";
 import { ArrowDown } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { stats } from "@/lib/site";
 import { Button } from "@/components/ui/button";
 import { Container } from "@/components/ui/container";
@@ -57,10 +57,11 @@ function FocusWords() {
 }
 
 export function Hero() {
+  const sectionRef = useRef<HTMLElement>(null);
   const lenis = useLenis();
 
   return (
-    <section id="home" className="relative isolate flex min-h-[100svh] flex-col overflow-hidden pt-[76px]">
+    <section ref={sectionRef} id="home" className="relative isolate flex min-h-[100svh] flex-col overflow-hidden pt-[76px]">
       {/* Signature visual */}
       {/* Soft glow: a plain gradient, not a blur filter, so it costs nothing to composite */}
       <div
@@ -73,7 +74,7 @@ export function Hero() {
         transition={{ duration: 1.6, ease }}
         className="absolute inset-0 -z-10"
       >
-        <SilkRibbons preset="hero" />
+        <SilkRibbons preset="hero" dragArea={sectionRef} />
       </motion.div>
       <div aria-hidden className="absolute inset-0 -z-10 bg-linear-to-r from-background via-background/70 to-transparent md:via-background/40" />
       <div aria-hidden className="absolute inset-x-0 bottom-0 -z-10 h-40 bg-linear-to-t from-background to-transparent" />

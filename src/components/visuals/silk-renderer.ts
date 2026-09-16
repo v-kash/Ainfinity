@@ -43,6 +43,17 @@ const STEPS = 64;
 const STILL_TIME = 14;
 const FRAME_MS = 1000 / 60;
 
+/** Drag physics. Distances are fractions of the shorter canvas side. */
+const PULL_MAX = 0.28; // rubber-band limit of a pull
+const PULL_RADIUS = 0.2; // how much silk around the grab point follows the cursor
+const FLUTTER = 0.03; // flutter amplitude at full energy
+const HOLD_SPRING = { stiffness: 420, damping: 31 }; // slightly elastic while held
+const RELEASE_SPRING = { stiffness: 190, damping: 7 }; // underdamped: wobbles back into place
+const ENERGY_DECAY = 0.9; // seconds for a flick's flutter to fade to ~37%
+/** How close (CSS px) the pointer must be to a ribbon's outer lines to grab it */
+const HIT_SLOP = 18;
+const HIT_STEPS = 48;
+
 const VERTEX = `
 precision highp float;
 // x: line index, y: position along the curve (0–1), z: side of the strip (-1 or 1)
@@ -59,6 +70,13 @@ uniform float uPhase;
 uniform float uLines;
 uniform float uTime;
 uniform float uHalf;
+// Drag interaction
+uniform vec2 uAnchor;
+uniform vec2 uPull;
+uniform float uRadius;
+uniform float uFlutter;
+uniform float uFlutterPhase;
+uniform float uSpin;
 varying float vT;
 varying float vSide;
 
@@ -70,8 +88,13 @@ vec2 linePoint(float u, float k) {
   vec2 d = 3.0 * m * m * (uP1 - uP0) + 6.0 * m * u * (uP2 - uP1) + 3.0 * u * u * (uP3 - uP2);
   vec2 n = vec2(-d.y, d.x) / max(length(d), 1e-4);
   float envelope = pow(max(sin(u * PI), 1e-6), 0.6);
-  float twist = 0.1 + 0.9 * sin(u * PI * uTwist + uTime * uSpeed + uPhase);
-  return b + n * envelope * (k * uWidth * twist + 5.0 * sin(u * 9.0 - uTime * 0.8 + k * 4.0));
+  float twist = 0.1 + 0.9 * sin(u * PI * uTwist + uTime * uSpeed + uPhase + uSpin);
+  // Slow idle ripple, plus a fast flutter wave that runs along the lines after a flick
+  float ripple = 5.0 * sin(u * 9.0 - uTime * 0.8 + k * 4.0) + uFlutter * sin(u * 22.0 - uFlutterPhase + k * 7.0);
+  vec2 p = b + n * envelope * (k * uWidth * twist + ripple);
+  // Silk near the grab point follows the pull, fading out with distance
+  vec2 g = p - uAnchor;
+  return p + uPull * exp(-dot(g, g) / (uRadius * uRadius));
 }
 
 void main() {
@@ -116,6 +139,7 @@ void main() {
 
 const UNIFORMS = [
   "uRes", "uP0", "uP1", "uP2", "uP3", "uWidth", "uTwist", "uSpeed", "uPhase", "uLines", "uTime", "uHalf",
+  "uAnchor", "uPull", "uRadius", "uFlutter", "uFlutterPhase", "uSpin",
   "uEdge", "uMid", "uTail", "uAlpha", "uLineWidth", "uHalfPx",
 ] as const;
 
@@ -213,7 +237,54 @@ export function createSilkRenderer(canvas: HTMLCanvasElement, ribbons: Ribbon[])
   let lastTime = STILL_TIME;
   const mouse = { x: 0.5, y: 0.5, tx: 0.5, ty: 0.5 };
 
+  // Drag state, in CSS px of canvas space
+  let grabbing = false;
+  let lastStep = 0;
+  let energy = 0;
+  let flutterPhase = 0;
+  let spin = 0;
+  const anchor = { x: 0, y: 0 };
+  const pull = { x: 0, y: 0, vx: 0, vy: 0 };
+  const pointer = { x: 0, y: 0, t: 0, speed: 0 };
+
+  /** Advances the pull spring and the flutter energy. Fixed substeps keep the spring stable at any frame rate. */
+  function step(time: number) {
+    const dt = Math.min(time - lastStep, 0.05);
+    lastStep = time;
+    if (dt <= 0) return;
+
+    let tx = 0;
+    let ty = 0;
+    if (grabbing) {
+      // Rubber band: the further you pull, the harder it resists
+      const rx = pointer.x - anchor.x;
+      const ry = pointer.y - anchor.y;
+      const len = Math.hypot(rx, ry);
+      const max = PULL_MAX * Math.min(w, h);
+      const f = len > 0 ? (max * Math.tanh(len / max)) / len : 0;
+      tx = rx * f;
+      ty = ry * f;
+    }
+    const { stiffness, damping } = grabbing ? HOLD_SPRING : RELEASE_SPRING;
+    const substeps = Math.ceil(dt * 120);
+    const sub = dt / substeps;
+    for (let i = 0; i < substeps; i++) {
+      pull.vx += ((tx - pull.x) * stiffness - pull.vx * damping) * sub;
+      pull.vy += ((ty - pull.y) * stiffness - pull.vy * damping) * sub;
+      pull.x += pull.vx * sub;
+      pull.y += pull.vy * sub;
+    }
+
+    energy *= Math.exp(-dt / ENERGY_DECAY);
+    flutterPhase = (flutterPhase + dt * 9) % (Math.PI * 2);
+    spin = (spin + dt * energy * 2.5) % (Math.PI * 2);
+  }
+
+  /** Radius of the pulled area; grows with the pull so long stretches bend smoothly instead of folding. */
+  const pullRadius = (S: number) => Math.max(PULL_RADIUS * S, Math.hypot(pull.x, pull.y));
+
   function draw(time: number) {
+    step(time);
     lastTime = time;
     if (!program || !w || !h || gl!.isContextLost()) return;
     mouse.x += (mouse.tx - mouse.x) * 0.05;
@@ -237,6 +308,11 @@ export function createSilkRenderer(canvas: HTMLCanvasElement, ribbons: Ribbon[])
     gl!.uniform3f(u.uTail, 1, 80 / 255, 20 / 255);
 
     const S = Math.min(w, h);
+    gl!.uniform2f(u.uAnchor, anchor.x, anchor.y);
+    gl!.uniform2f(u.uPull, pull.x, pull.y);
+    gl!.uniform1f(u.uRadius, pullRadius(S));
+    gl!.uniform1f(u.uFlutter, energy * FLUTTER * S);
+    gl!.uniform1f(u.uFlutterPhase, flutterPhase);
     for (const r of ribbons) {
       const mx = (mouse.x - 0.5) * 40 * r.depth;
       const my = (mouse.y - 0.5) * 40 * r.depth;
@@ -249,8 +325,46 @@ export function createSilkRenderer(canvas: HTMLCanvasElement, ribbons: Ribbon[])
       gl!.uniform1f(u.uSpeed, r.speed);
       gl!.uniform1f(u.uPhase, r.phase);
       gl!.uniform1f(u.uLines, r.lines);
+      gl!.uniform1f(u.uSpin, spin * r.depth);
       gl!.drawElements(gl!.TRIANGLES, r.lines * STEPS * 6, gl!.UNSIGNED_SHORT, 0);
     }
+  }
+
+  /** Whether a point (CSS px) is on a visible part of a ribbon. Mirrors the vertex shader's centreline and spread. */
+  function hitTest(x: number, y: number) {
+    if (!w || !h) return false;
+    const S = Math.min(w, h);
+    const radius = pullRadius(S);
+    const flutter = energy * FLUTTER * S;
+    for (const r of ribbons) {
+      const mx = (mouse.x - 0.5) * 40 * r.depth;
+      const my = (mouse.y - 0.5) * 40 * r.depth;
+      const x0 = r.pts[0][0] * w + mx, y0 = r.pts[0][1] * h + my;
+      const x1 = r.pts[1][0] * w + mx, y1 = r.pts[1][1] * h + my;
+      const x2 = r.pts[2][0] * w + mx, y2 = r.pts[2][1] * h + my;
+      const x3 = r.pts[3][0] * w + mx, y3 = r.pts[3][1] * h + my;
+      const ax = x3 - x0, ay = y3 - y0;
+      const axisLen = ax * ax + ay * ay;
+
+      for (let s = 0; s <= HIT_STEPS; s++) {
+        const t = s / HIT_STEPS;
+        const m = 1 - t;
+        let bx = m * m * m * x0 + 3 * m * m * t * x1 + 3 * m * t * t * x2 + t * t * t * x3;
+        let by = m * m * m * y0 + 3 * m * m * t * y1 + 3 * m * t * t * y2 + t * t * t * y3;
+        // The ribbon's gradient fades out near its ends; those parts can't be grabbed
+        const along = ((bx - x0) * ax + (by - y0) * ay) / axisLen;
+        if (along < 0.12 || along > 0.9) continue;
+        const gx = bx - anchor.x, gy = by - anchor.y;
+        const f = Math.exp(-(gx * gx + gy * gy) / (radius * radius));
+        bx += pull.x * f;
+        by += pull.y * f;
+        const envelope = Math.pow(Math.sin(t * Math.PI), 0.6);
+        const twist = Math.abs(0.1 + 0.9 * Math.sin(t * Math.PI * r.twist + lastTime * r.speed + r.phase + spin * r.depth));
+        const reach = envelope * (0.5 * r.width * S * twist + 5 + flutter) + HIT_SLOP;
+        if (Math.hypot(x - bx, y - by) < reach) return true;
+      }
+    }
+    return false;
   }
 
   function loop(now: number) {
@@ -294,6 +408,30 @@ export function createSilkRenderer(canvas: HTMLCanvasElement, ribbons: Ribbon[])
     setMouse(x: number, y: number) {
       mouse.tx = x;
       mouse.ty = y;
+    },
+    hitTest,
+    /** Starts a pull at a point (CSS px). `timeStamp` is the event's timeStamp. */
+    grab(x: number, y: number, timeStamp: number) {
+      // Re-grabbing silk that's still wobbling continues from where it is instead of jumping
+      const gx = x - pull.x - anchor.x, gy = y - pull.y - anchor.y;
+      const radius = pullRadius(Math.min(w, h));
+      const f = Math.exp(-(gx * gx + gy * gy) / (radius * radius));
+      anchor.x = x - pull.x * f;
+      anchor.y = y - pull.y * f;
+      Object.assign(pointer, { x, y, t: timeStamp, speed: 0 });
+      grabbing = true;
+    },
+    drag(x: number, y: number, timeStamp: number) {
+      const dt = (timeStamp - pointer.t) / 1000;
+      if (dt > 0) pointer.speed = pointer.speed * 0.5 + (Math.hypot(x - pointer.x, y - pointer.y) / dt) * 0.5;
+      Object.assign(pointer, { x, y, t: timeStamp });
+      // Fast drags stir up flutter
+      energy = Math.max(energy, Math.min(1, pointer.speed / 2400));
+    },
+    release(timeStamp: number) {
+      grabbing = false;
+      // A flick (still moving when let go) flutters harder; a pause before letting go doesn't
+      if (timeStamp - pointer.t < 80) energy = Math.max(energy, Math.min(1.2, pointer.speed / 1500));
     },
     setDark(value: boolean) {
       dark = value;
