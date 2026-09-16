@@ -1,0 +1,6 @@
+<!-- PLACEHOLDER — replace with your logo for the DARK theme (white/light logo). Keep this filename, or update src/lib/site.ts -->
+<svg xmlns="http://www.w3.org/2000/svg" width="344" height="72" viewBox="0 0 344 72">
+  <path d="M36 8 64 64H52L36 30 20 64H8z" fill="#ffffff"/>
+  <path d="M2 50c16-16 40 8 68-8-8 18-40 6-68 14z" fill="#ff5a1f"/>
+  <text x="84" y="46" font-family="Manrope, 'Segoe UI', Arial, sans-serif" font-size="30" font-weight="600" letter-spacing="-0.5" fill="#ffffff">Aarambh Infinity</text>
+</svg>
