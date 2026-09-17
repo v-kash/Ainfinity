@@ -96,7 +96,7 @@ export function ServicesIndex() {
               animate={{ opacity: 1, scale: 1, rotate: 0 }}
               exit={{ opacity: 0, scale: 0.6, rotate: 6 }}
               transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-              className="relative ml-56 h-44 w-64 overflow-hidden rounded-xl shadow-2xl"
+              className="relative ml-56 h-44 w-64 overflow-hidden rounded-[2px] shadow-2xl"
             >
               <AnimatePresence initial={false}>
                 <motion.div
