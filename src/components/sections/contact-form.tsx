@@ -84,6 +84,7 @@ export function ContactForm({ initialService }: { initialService?: string }) {
   const [budget, setBudget] = useState<string | null>(null);
   const [status, setStatus] = useState<"idle" | "sending" | "sent">("idle");
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const toggle = (slug: string) =>
     setSelected((cur) => (cur.includes(slug) ? cur.filter((s) => s !== slug) : [...cur, slug]));
@@ -98,9 +99,22 @@ export function ContactForm({ initialService }: { initialService?: string }) {
     if (Object.keys(next).length) return;
 
     setStatus("sending");
-    // TODO: send `data`, `selected` and `budget` to your API route, Formspree, Resend, etc.
-    await new Promise((r) => setTimeout(r, 1200));
-    setStatus("sent");
+    setSubmitError(null);
+    try {
+      const res = await fetch("/api/contact", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...Object.fromEntries(data), services: selected, budget }),
+      });
+      if (!res.ok) {
+        const { error } = await res.json().catch(() => ({ error: null }));
+        throw new Error(error || "Something went wrong. Please try again.");
+      }
+      setStatus("sent");
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
+      setStatus("idle");
+    }
   };
 
   return (
@@ -169,6 +183,15 @@ export function ContactForm({ initialService }: { initialService?: string }) {
             </fieldset>
 
             <Field label="Tell us about your project" name="message" textarea />
+
+            {/* Honeypot for bots; hidden from people and screen readers */}
+            <input type="text" name="website" tabIndex={-1} autoComplete="off" aria-hidden className="hidden" />
+
+            {submitError && (
+              <p role="alert" className="text-sm text-red-500">
+                {submitError}
+              </p>
+            )}
 
             <Button type="submit" size="lg" arrow={status === "idle"} disabled={status === "sending"}>
               {status === "sending" ? (

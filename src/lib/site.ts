@@ -131,15 +131,15 @@ export const site = {
   description:
     "Websites, apps, AI automation and custom business software, built by a team in Ahmedabad.",
   contact: {
-    address: "Ahmedabad, Gujarat, India",
-    email: "hello@aarambhinfinity.com",
-    phone: "+91 98765 43210",
-    phoneHref: "tel:+919876543210",
+    address: "813, Silver Radiance 4, Ovnaj, Bhavik Publication, SG Highway, Ahmedabad, Gujarat, 380060",
+    email: "info@aarambhgrow.tech",
+    phone: "+91 99987 15799",
+    phoneHref: "tel:+919998715799",
   },
   socials: [
-    { label: "LinkedIn", href: "https://www.linkedin.com/", icon: "linkedin" },
-    { label: "Instagram", href: "https://www.instagram.com/", icon: "instagram" },
-    { label: "YouTube", href: "https://www.youtube.com/", icon: "youtube" },
+    { label: "LinkedIn", href: "https://www.linkedin.com/company/aarambhgrow-group-of-companies/", icon: "linkedin" },
+    { label: "Instagram", href: "https://www.instagram.com/aarambhgrow", icon: "instagram" },
+    // { label: "YouTube", href: "https://www.facebook.com/aarambhgrow", icon: "youtube" },
   ] as const,
 };
 

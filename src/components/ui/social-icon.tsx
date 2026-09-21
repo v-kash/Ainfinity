@@ -19,3 +19,4 @@ export function SocialIcon({ name, className }: { name: "linkedin" | "instagram"
     </svg>
   );
 }
+  
