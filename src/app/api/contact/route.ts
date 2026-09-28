@@ -1,8 +1,10 @@
+
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { Resend } from "resend";
 import { services } from "@/lib/services";
 import { site } from "@/lib/site";
+import { pushLeadToLms } from "@/lib/lms";
 import { confirmationEmail, LOGO_CID, teamEmail, type ContactSubmission } from "@/lib/email/contact-template";
 
 export const runtime = "nodejs";
@@ -29,6 +31,18 @@ const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice
 
 let logo: Buffer | undefined;
 const getLogo = async () => (logo ??= await readFile(path.join(process.cwd(), "public/logo/email-logo.png")));
+
+// Folds the extra form fields into the LMS message, which only has name/email/phone/message.
+function lmsMessage(data: ContactSubmission) {
+  return [
+    data.services.length ? `Services: ${data.services.join(", ")}` : "",
+    data.company ? `Company: ${data.company}` : "",
+    data.budget ? `Budget: ${data.budget}` : "",
+    data.message ?? "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
 
 export async function POST(req: Request) {
   if (!resend) return Response.json({ error: "Email is not configured." }, { status: 500 });
@@ -59,16 +73,24 @@ export async function POST(req: Request) {
 
   if (!data.name) return Response.json({ error: "Enter your name." }, { status: 400 });
   if (!/^\S+@\S+\.\S+$/.test(data.email)) return Response.json({ error: "Enter a valid email." }, { status: 400 });
+  if (!data.phone) return Response.json({ error: "Enter your phone number." }, { status: 400 });
 
-  const from = process.env.RESEND_FROM || `${site.name} <onboarding@resend.dev>`;
+  const from = process.env.CONTACT_FROM_EMAIL || `${site.name} <onboarding@resend.dev>`;
   const to = process.env.CONTACT_TO_EMAIL || site.contact.email;
   const attachments = [{ filename: "logo.png", content: await getLogo(), contentId: LOGO_CID }];
 
+  // The lead is captured if either the LMS or the team email accepts it.
   const team = teamEmail(data);
-  const { error } = await resend.emails.send({ from, to, replyTo: data.email, attachments, ...team });
+  const [leadSaved, { error }] = await Promise.all([
+    pushLeadToLms({ name: data.name, email: data.email, phone: data.phone, message: lmsMessage(data) }),
+    resend.emails.send({ from, to, replyTo: data.email, attachments, ...team }),
+  ]);
+
   if (error) {
     console.error("Resend error:", error);
-    return Response.json({ error: "Couldn't send your message. Please email us directly." }, { status: 502 });
+    if (!leadSaved) {
+      return Response.json({ error: "Couldn't send your message. Please email us directly." }, { status: 502 });
+    }
   }
 
   // The confirmation is a courtesy; don't fail the request if it bounces
