@@ -1,8 +1,9 @@
-import type { Metadata } from "next";
+import type { Metadata, ResolvingMetadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Check } from "lucide-react";
-import { getService, serviceGroups, services } from "@/lib/services";
+import { getService, serviceGroups, services, type Service } from "@/lib/services";
+import { absoluteUrl, organizationId } from "@/lib/seo";
 import { Button } from "@/components/ui/button";
 import { Container } from "@/components/ui/container";
 import { ArrowSwap } from "@/components/ui/arrow-icon";
@@ -10,16 +11,75 @@ import { ServiceIcon } from "@/components/ui/service-icon";
 import { SmartImage } from "@/components/ui/smart-image";
 import { Process } from "@/components/sections/process";
 import { Cta } from "@/components/sections/cta";
+import { JsonLd } from "@/components/seo/json-ld";
 
 export function generateStaticParams() {
   return services.map((s) => ({ slug: s.slug }));
 }
 
-export async function generateMetadata({ params }: PageProps<"/services/[slug]">): Promise<Metadata> {
+export async function generateMetadata(
+  { params }: PageProps<"/services/[slug]">,
+  parent: ResolvingMetadata
+): Promise<Metadata> {
   const { slug } = await params;
   const service = getService(slug);
   if (!service) return {};
-  return { title: service.title, description: service.description };
+  // Setting openGraph/twitter here replaces the inherited ones, so carry over the site share images
+  const { openGraph, twitter } = await parent;
+  const { title, description } = service.seo;
+  const url = absoluteUrl(`/services/${service.slug}`);
+  return {
+    title: { absolute: title },
+    description,
+    alternates: { canonical: url },
+    openGraph: {
+      type: "website",
+      url,
+      siteName: "Aarambh Infinity",
+      locale: "en_IN",
+      title,
+      description,
+      images: openGraph?.images,
+    },
+    twitter: { card: "summary_large_image", title, description, images: twitter?.images },
+  };
+}
+
+function serviceSchema(service: Service) {
+  const url = absoluteUrl(`/services/${service.slug}`);
+  return {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "Service",
+        "@id": `${url}#service`,
+        name: service.title,
+        serviceType: service.title,
+        description: service.seo.description,
+        url,
+        provider: { "@id": organizationId },
+        areaServed: { "@type": "Country", name: "India" },
+      },
+      {
+        "@type": "BreadcrumbList",
+        "@id": `${url}#breadcrumb`,
+        itemListElement: [
+          { "@type": "ListItem", position: 1, name: "Home", item: absoluteUrl() },
+          { "@type": "ListItem", position: 2, name: "Services", item: absoluteUrl("/services") },
+          { "@type": "ListItem", position: 3, name: service.title, item: url },
+        ],
+      },
+      {
+        "@type": "FAQPage",
+        "@id": `${url}#faq`,
+        mainEntity: service.seo.faqs.map((f) => ({
+          "@type": "Question",
+          name: f.question,
+          acceptedAnswer: { "@type": "Answer", text: f.answer },
+        })),
+      },
+    ],
+  };
 }
 
 export default async function ServicePage({ params }: PageProps<"/services/[slug]">) {
@@ -34,6 +94,7 @@ export default async function ServicePage({ params }: PageProps<"/services/[slug
 
   return (
     <>
+      <JsonLd data={serviceSchema(service)} />
       <section className="relative overflow-hidden pt-[120px] pb-16 md:pt-[150px]">
         <div aria-hidden className="absolute -top-40 -left-40 -z-10 size-[480px] rounded-full bg-accent/15 blur-[120px]" />
         <Container>
@@ -58,7 +119,7 @@ export default async function ServicePage({ params }: PageProps<"/services/[slug
                 </span>
               </div>
               <h1 className="mt-6 text-[clamp(2.4rem,5.4vw,4.6rem)] font-medium leading-[1.02] tracking-[-0.045em]">
-                {service.title}
+                {service.seo.heading}
               </h1>
               <p className="mt-6 max-w-xl text-lg leading-relaxed text-muted">{service.description}</p>
               <div className="mt-8 flex flex-wrap gap-3">
@@ -121,6 +182,26 @@ export default async function ServicePage({ params }: PageProps<"/services/[slug
               </ul>
             </div>
           )}
+        </Container>
+      </section>
+
+      <section aria-labelledby="faq-title" className="border-t border-line py-16 md:py-24">
+        <Container>
+          <div className="grid gap-12 lg:grid-cols-12">
+            <div className="lg:col-span-4">
+              <h2 id="faq-title" className="text-[clamp(1.8rem,3vw,2.5rem)] font-medium leading-tight tracking-[-0.035em]">
+                Frequently asked <span className="text-accent">questions.</span>
+              </h2>
+            </div>
+            <div className="divide-y divide-line border-y border-line lg:col-span-8">
+              {service.seo.faqs.map((f) => (
+                <div key={f.question} className="py-7">
+                  <h3 className="text-lg font-medium tracking-[-0.015em]">{f.question}</h3>
+                  <p className="mt-3 max-w-2xl leading-relaxed text-muted">{f.answer}</p>
+                </div>
+              ))}
+            </div>
+          </div>
         </Container>
       </section>
 

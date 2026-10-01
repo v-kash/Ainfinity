@@ -8,6 +8,7 @@ import { Cta } from "@/components/sections/cta";
 export const metadata: Metadata = {
   title: "Insights",
   description: "Practical notes on websites, automation, WhatsApp commerce and AI for growing businesses.",
+  alternates: { canonical: "/insights" },
 };
 
 const posts = [

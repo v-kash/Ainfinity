@@ -11,7 +11,8 @@ import { Counter } from "@/components/ui/counter";
 import { SilkRibbons } from "@/components/visuals/silk-ribbons";
 
 const ease = [0.16, 1, 0.3, 1] as const;
-const lines = ["Where", "Technology", "Meets"];
+const lines = ["Web Development,", "AI Automation &", "Custom Software for"];
+const accentLine = "Growing Businesses.";
 const words = ["Ideas", "Systems", "People", "Growth"];
 
 /** Rotating focus words. Isolated so its timer re-renders only this list, not the whole hero. */
@@ -88,20 +89,19 @@ export function Hero() {
               transition={{ duration: 0.8, delay: 0.1, ease }}
               className="text-[11px] font-semibold uppercase tracking-[0.22em] text-accent-ink"
             >
-              Your Growth Partner
+              Web • Mobile • AI • Automation • Software
             </motion.p>
 
-            <h1 className="mt-6 text-[clamp(2.75rem,6.2vw,5.4rem)] font-medium leading-[0.98] tracking-[-0.045em]">
-              {lines.map((line, i) => (
+            <h1 className="mt-6 text-[clamp(2.4rem,5vw,4.4rem)] font-medium leading-[0.98] tracking-[-0.045em]">
+              {[...lines, accentLine].map((line, i) => (
                 <span key={line} className="block overflow-hidden pb-[0.2em]">
                   <motion.span
-                    className="block"
+                    className={i === lines.length ? "block text-accent" : "block"}
                     initial={{ y: "110%" }}
                     animate={{ y: 0 }}
                     transition={{ duration: 1.1, delay: 0.15 + i * 0.09, ease }}
                   >
                     {line}
-                    {i === lines.length - 1 && <span className="text-accent"> Possibility.</span>}
                   </motion.span>
                 </span>
               ))}
@@ -111,9 +111,11 @@ export function Hero() {
               initial={{ opacity: 0, y: 14 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.9, delay: 0.55, ease }}
-              className="mt-7 max-w-[30rem] text-[clamp(1rem,1.3vw,1.125rem)] leading-relaxed text-muted"
+              className="mt-7 max-w-[36rem] text-[clamp(1rem,1.3vw,1.125rem)] leading-relaxed text-muted"
             >
-              We build digital systems, AI automation and business solutions for a brighter tomorrow.
+              Aarambh Infinity builds websites, mobile apps, AI automations, custom business software, digital marketing
+              systems and analytics solutions that help businesses attract customers, reduce manual work and scale
+              operations.
             </motion.p>
 
             <motion.div

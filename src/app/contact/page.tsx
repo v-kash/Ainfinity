@@ -8,6 +8,7 @@ import { ContactForm } from "@/components/sections/contact-form";
 export const metadata: Metadata = {
   title: "Contact",
   description: "Tell us about your project and we'll reply within one working day.",
+  alternates: { canonical: "/contact" },
 };
 
 export default async function ContactPage({ searchParams }: PageProps<"/contact">) {

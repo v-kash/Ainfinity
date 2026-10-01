@@ -7,11 +7,37 @@ import { Navbar } from "@/components/layout/navbar";
 import { Footer } from "@/components/layout/footer";
 import { ScrollProgress } from "@/components/layout/scroll-progress";
 import { site } from "@/lib/site";
+import { siteSchema, siteUrl } from "@/lib/seo";
 import ChatWidget from "@/components/chat/ChatWidget";
+import { JsonLd } from "@/components/seo/json-ld";
 
+// Share images come from app/opengraph-image.tsx and app/twitter-image.tsx
 export const metadata: Metadata = {
-  title: { default: `${site.name} — Where Technology Meets Possibility`, template: `%s — ${site.name}` },
-  description: site.description,
+  metadataBase: new URL(siteUrl),
+  title: {
+    default: `${site.name} | Web, AI Automation & Custom Software`,
+    template: `%s | ${site.name}`,
+  },
+  description: "Web development, mobile apps, AI automation, custom software, digital marketing and analytics solutions.",
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+      "max-video-preview": -1,
+    },
+  },
+  openGraph: {
+    type: "website",
+    siteName: site.name,
+    locale: "en_IN",
+  },
+  twitter: {
+    card: "summary_large_image",
+  },
 };
 
 export const viewport: Viewport = {
@@ -23,8 +49,9 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en-IN" suppressHydrationWarning>
       <body className="min-h-dvh antialiased">
+        <JsonLd data={siteSchema} />
         <Providers>
           <a
             href="#main"

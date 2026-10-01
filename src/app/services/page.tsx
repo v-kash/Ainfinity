@@ -10,6 +10,7 @@ import { Cta } from "@/components/sections/cta";
 export const metadata: Metadata = {
   title: "Services",
   description: "Web, mobile, marketing, branding, AI automation, WhatsApp commerce, custom platforms and more.",
+  alternates: { canonical: "/services" },
 };
 
 export default function ServicesPage() {
